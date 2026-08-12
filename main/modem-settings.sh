@@ -36,7 +36,20 @@
 
 # Fuction to check that an IP address is valid.
 checkIP() {
-	echo $* | awk -F"\." ' $0 - /^([0-9]{1,3}\.){3}[0-9]{1,3}$/ && $1 <= 255 && $2 <= 255 && $3 <= 255 && $4 <= 255 '
+    local ip="$1"
+    local IFS=.
+    local a b c d
+
+    read -r a b c d <<< "$ip"
+
+    [[ -n "$d" ]] || return 1
+
+    for octet in "$a" "$b" "$c" "$d"; do
+        [[ "$octet" =~ ^[0-9]+$ ]] || return 1
+        (( octet >= 0 && octet <= 255 )) || return 1
+    done
+
+    return 0
 }
 
 # Use nslookup to check the IP address of the entered domain
@@ -95,7 +108,7 @@ pppDirectory="/etc/ppp"
 DCpass="dreamcast"
 
 # Check for an 'Override' of 'Login' for Password
-overPass=$(grep "Login" $Override | grep -v \# | awk '{print $3}')
+overPass=$(grep "Login" "$Override" | grep -v \# | awk '{print $3}')
 
 if [[ ! -z $overPass ]]; then
 	DCpass=$overPass
@@ -116,10 +129,8 @@ overWeb=$(grep "Webserver Off" $Override | grep -v \#)
 ###############################################
 
 # Get local IP Address
-myLANip=$(hostname -I)
-
-# Remove trailing white space from IP Address
-myLANip=${myLANip% *}
+myLANip=$(ip route get 1 |
+          awk '{print $7; exit}')
 
 if [[ -z $myLANip ]]; then
 	echo "Error: No Internet Detected."
@@ -152,8 +163,8 @@ if [[ -z $overDCIP ]]; then
 	# IP addresses to scan through
 	# Scan ten higher than my current IP.
 	HOST_LOW=$(echo $myLANip | cut -d "." -f 4)
-	HOST_LOW=$(($HOST_LOW + 10))
-	HOST_HIGH=200
+	HOST_LOW=$(($HOST_LOW + 5))
+	HOST_HIGH=250
 
 	# Scan for an unused IP address.
 	for ((i=$HOST_LOW;i<$HOST_HIGH;i++)); do
@@ -187,8 +198,15 @@ else
 	echo "Dreamcast IP:     $ipDreamcast"
 fi
 
-netmask=$(ifconfig | grep -w inet | grep -v 127.0.0.1 |
-	awk '{print $4}' | cut -d ":" -f 2)
+cidr=$(ip -4 addr show "$(/usr/sbin/ip route get 1 | awk '{print $5;exit}')" |
+	awk '/inet / {print $2}' | cut -d/ -f 2)
+	
+	case "$cidr" in
+	    8)  netmask="255.0.0" ;;
+	    16) netmask="255.255.0.0" ;;
+	    24) netmask="255.255.255.0" ;;
+	    *)  echo "Unsupported CIDR /$cidr"; exit 1 ;;
+	esac
 
 if [[ -z $netmask ]]; then
 	echo "Error: Could not find internet netmask."
@@ -197,36 +215,55 @@ else
 	echo "Netmask:          $netmask"
 fi
 
-# Check Overrride file for specified DNS to use
-overDNS=$(grep "Set DNS" $Override | grep -v \# | awk '{print $3}')
+########################
+# Determine DNS server for PPP  #
+########################
 
-# Check that the group listed a valid IP
-cIP=$(checkIP $overDNS)
+# Check Override file for specified DNS server
+overDNS=$(grep "^Set DNS" "$Override" | grep -v '^#' | awk '{print $3}')
 
-# If not valid, assume it's a domain
-if [[ -z $cIP ]]; then
-	overDNS=$(lookupDomain $overDNS)
-fi
+dnsServer=""
 
-# No Override Specified for DNS IP Address
-if [[ ! -z $overDNS ]]; then
-	echo "Override for DNS Gateway Found: $overDNS"
-	gateway=$overDNS
-elif [[ -z $overWeb ]]; then
-	# We redirect the DNS to the local DC-PC server.
-	# This will use dnsmasq to handle requests.
-	gateway=$myLANip
+if [[ -n "$overDNS" ]]; then
+
+    # If the override isn't already an IP, try resolving it.
+    if ! checkIP "$overDNS"; then
+        overDNS=$(lookupDomain "$overDNS")
+    fi
+
+    if checkIP "$overDNS"; then
+        dnsServer="$overDNS"
+        echo "DNS Override:     $dnsServer"
+    else
+        echo "Invalid DNS override."
+        exit 1
+    fi
+
+elif [[ -z "$overWeb" ]]; then
+
+    # dnsmasq is running locally
+    dnsServer="$myLANip"
+    echo "DNS Server:       Local dnsmasq ($dnsServer)"
+
 else
-	# Look up and use the DNS that the local
-	# machine is using.
-	gateway=$(route -n | grep -w UG | awk '{print $2}' | cut -d " " -f 2)
-fi
 
-if [[ -z $gateway ]]; then
-	echo "Error: Could not find internet gateway (router)."
-	exit 1
-else
-	echo "Gateway:          $gateway"
+    # Try systemd-resolved first
+    if command -v resolvectl >/dev/null 2>&1; then
+        dnsServer=$(resolvectl dns | awk '/DNS Servers:/ {print $3; exit}')
+    fi
+
+    # Fall back to resolv.conf
+    if [[ -z "$dnsServer" ]]; then
+        dnsServer=$(awk '/^nameserver/ && $2 != "127.0.0.53" {print $2; exit}' /etc/resolv.conf)
+    fi
+
+    if [[ -z "$dnsServer" ]]; then
+        echo "Could not determine system DNS."
+        exit 1
+    fi
+
+    echo "DNS Server:       $dnsServer"
+
 fi
 
 
@@ -292,16 +329,19 @@ echo "# These settings are based on the following guides:" >> $optFile
 echo "# www.dreamcast-scene.com/guides/pc-dc-server-guide-win7" >> $optFile
 echo "# www.ryochan7.com/blog/2009/06/23/pc-dc-server-guide-part-0-introduction" >> $optFile
 echo -e >> $optFile
-echo "debug" >> $optFile
-echo "login" >> $optFile
-echo "default-asyncmap" >> $optFile
-echo "require-pap" >> $optFile
+echo "lock" >> $optFile
+echo "noauth" >> $optFile
+echo "refuse-pap" >> $optFile
+echo "refuse-eap" >> $optFile
+echo "refuse-chap" >> $optFile
+echo "refuse-mschap" >> $optFile
+echo "nobsdcomp" >> $optFile
+echo "nodeflate" >> $optFile
 echo "proxyarp" >> $optFile
-echo "ktune" >> $optFile
 echo -e >> $optFile
 echo "# DNS Server Address" >> $optFile
 echo "# If we have dnsmasq, this is the local IP address" >> $optFile
-echo "ms-dns $gateway" >> $optFile
+echo "ms-dns $dnsServer" >> $optFile
 
 ########################
 # /etc/ppp/pap-secrets #
@@ -314,10 +354,12 @@ papLogin="$DCuser	*	$DCpass	*"
 
 
 if [[ -z $papSecrets ]]; then
-	echo "$papLogin" >> $papFile
+	echo "$papLogin" >> "$papFile"
 	echo "Added"
 else
-	sed -i "s/^$papSecrets/$papLogin/" $papFile
+	grep -v "^${DCuser}[[:space:]]" "$papFile" > "${papFile}.tmp"
+	echo "$papLogin" >> "${papFile}.tmp"
+	mv "${papFile}.tmp" "$papFile"
 	echo "Updated"
 fi
 
@@ -338,6 +380,10 @@ echo "name \"$DCuser\"" >> $peerFile
 echo "lock" >> $peerFile
 echo "usepeerdns" >> $peerFile
 echo "noauth" >> $peerFile
+
+echo "novj" >> $peerFile
+echo "noccp" >> $peerFile
+echo "noipv6" >> $peerFile
 
 # Set up the computer to have an account
 # for the dreamcast to log into
@@ -366,7 +412,7 @@ if [[ -z $overWeb ]]; then
 	# Make sure the apache2 config file exists.
 	# If not we make a default one to avoid
 	# a couple harmless warnings.
-	apacheDefault="/etc/apache2/apache2.conf"
+	apacheDefault="/etc/httpd/conf/httpd.conf"
 	hasServerName=$( grep "ServerName" $apacheDefault | grep -v \# )
 	if [[ -z $hasServerName ]]; then
 		echo "Writing:  $apacheDefault"
@@ -375,109 +421,288 @@ if [[ -z $overWeb ]]; then
 		echo "# Define ServerName to eliminate" >> $apacheDefault
 		echo "# a couple apache2 warnings." >> $apacheDefault
 		echo "ServerName localhost" >> $apacheDefault
+fi
+
+echo "Checking: For Updated Websites"
+
+# Run the script to check if any website files exist in
+# the specific directory and update the apache directories
+exec sudo ./load-websites.sh &
+
+# Wait for the website update to finish executing
+wait $!
+
+# Set up dnsmasq file for Apache Server
+#############################
+# Build dnsmasq config #
+#############################
+	dnsmasqFile="/etc/dnsmasq.d/dreamcasthost.conf"
+
+	echo "Writing: $dnsmasqFile"
+
+	cat >"$dnsmasqFile" <<EOF
+#DreamcastHost
+#Automatically Generated.
+EOF
+#######################################
+# Determine default Domain Destination #
+#######################################
+
+directTo="$myLANip"
+
+overHost=$(grep "^Host" "$Override" | grep -v '^#' | awk '{print $2}')
+
+if [[ -n "$overHost" ]]; then
+	echo "Host override found: $overHost"
+	directTo="$overHost"
+fi
+
+#######################
+# Redirect #
+#######################
+
+echo
+echo "Processing Redirect Overrides..."
+
+grep '^Redirect:' "$Override" | grep -v '^#' | while read -r _ host target
+do
+
+	host="${host,,}"
+	host="${host%.}"
+
+	# Is this target a Group?
+	group=$(awk -v g="$target" '$1=="Group:" && $2==g {print $3}' "$Override")
+
+	[[ -n "$group" ]] && target="$group"
+
+	# IP?
+	if checkIP "$target"; then
+
+		printf "address=/%s/%s\n" \
+			"$host" \
+			"$target" >>"$dnsmasqFile"
+
+		echo "HOST $host -> $target"
+	else
 	fi
+done
 
-	echo "Checking: For Updated Websites"
+###################################
+# IP Redirect Overrides (nftables) #
+###################################
 
-	# Run the script to check if any website files exist in
-	# the specific directory and update the apache directories
-	exec sudo ./load-websites.sh &
+echo
+echo "Processing IP Redirect Overrides..."
 
-	# Wait for the website update to finish executing
-	wait $!
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
-	# Set up Hosts file for Apache Server
-	hostsFile="/etc/hosts"
+# Delete old table
+nft delete table ip dreamcast 2>/dev/null
 
-	# Remove the previous dreamcast domains entry
-	sed -i '/Start Dream/,/End Dream/d' $hostsFile
+# Create nft table
+nft list table ip dreamcast >/dev/null 2>&1 || {
+    
+    nft add table ip dreamcast
 
-	# Set the default web host / DNS as the local machine
-	directTo=$myLANip
-
-	# Check Override file for "Host"
-	overHost=$(grep "Host" $Override | grep -v \# |
-		awk '{print $2}')
-
-	# If there's an override for "Host"
-	# we direct traffic to it.
-	if [[ ! -z $overHost ]]; then
-		echo "Host override found: $overHost"
-		directTo=$overHost
-	fi
-
-	echo "Writing:  Domains to $hostsFile"
-	echo "### Start Dreamcast Hosts ###" >> $hostsFile
-
-	# We write the "Redirect" override commands before
-	# writing the "Domain" override commands as we give
-	# the "Redirect" commands priority. In order to do
-	# that they need to be at the top of the "$hostsFile"
-
-	# Read all lines that contain "Redirect"
-	while read -r line; do
-
-		# Grab the redirect's IP address
-		reIP=$(echo $line | awk '{print $3}')
-
-		# Check that "reIP" is a valid IP address
-		cIP=$(checkIP $reIP)
-
-		# If nothing is returned, then it is not an IP address
-		if [[ -z $cIP ]]; then
-
-			# Check if the "reIP" is a Group
-			cGroup=$(grep "Group" $Override | grep $reIP |
-				grep -v \# | awk '{print $3}')
-
-			# If no group found, assume it's a domain.
-			if [[ -z $cGroup ]]; then
-
-				# Check the IP for the domain
-				reIP=$(lookupDomain $reIP)
-			else
-				#Set "reIP" to the entry for the group
-				reIP=$cGroup
-
-				# Check that the group listed a valid IP
-				cIP=$(checkIP $reIP)
-
-				# If not valid, assume it's a domain
-				if [[ -z $cIP ]]; then
-					reIP=$(lookupDomain $reIP)
-				fi
-			fi
-		fi
-
-		# Grab the redirect's domain name
-		reNAME=$(echo $line | awk '{print $2}')
-		echo -e "$reIP \t$reNAME" >> $hostsFile
-
-	# Feed the check of the Overrride file for
-	# "Redirect" and input results into the while loop
-	done < <(grep "Redirect" $Override | grep -v \#)
+    nft 'add chain ip dreamcast prerouting {
+        type nat hook prerouting priority dstnat;
+        policy accept;
+    }'
+}
 
 
-	# Read all lines that contain "Domain"
-	while read -r line; do
+grep '^IPRedirect:' "$Override" | grep -v '^#' |
+while read -r _ proto interface source target
+do
 
-		echo -e "$directTo \t$line" >> $hostsFile
+    #
+    # Format:
+    #
+    # IPRedirect: both eth1 192.168.1.1:* 192.168.1.19:*
+    #
 
-	# Feed the check of the Overrride file for
-	# "Domain" and input results into the while loop
-	done < <(grep "Domain" $Override | grep -v \# |
-		awk '{print $2}')
+    if [[ "$proto" != "tcp" &&
+          "$proto" != "udp" &&
+          "$proto" != "both" ]]; then
 
-	echo "#### End Dreamcast Hosts ####" >> $hostsFile
+        echo "Invalid protocol: $proto"
+        continue
 
-	echo "Restarting: apache"
-	sudo service apache2 restart > /dev/null &
+    fi
 
-	echo "Restarting: dnsmasq"
-	sudo /etc/init.d/dnsmasq restart > /dev/null &
 
-	wait
+#################################
+# Parse source #
+#################################
+
+    if [[ "$source" == *:* ]]; then
+
+        srcIP="${source%%:*}"
+        srcPort="${source##*:}"
+
+    else
+
+        srcIP="$source"
+        srcPort="*"
+
+    fi
+
+
+#################################
+# Parse destination #
+#################################
+
+    if [[ "$target" == *:* ]]; then
+
+        dstIP="${target%%:*}"
+        dstPort="${target##*:}"
+
+    else
+
+        dstIP="$target"
+        dstPort=""
+
+    fi
+
+
+#################################
+# DNAT target #
+#################################
+
+    if [[ "$dstPort" == "*" || -z "$dstPort" ]]; then
+        dnatTarget="$dstIP"
+    else
+        dnatTarget="${dstIP}:${dstPort}"
+    fi
+
+
+    echo "$proto interface:$interface $srcIP:$srcPort -> $dnatTarget"
+
+
+
+    #################################
+    # Generate port rule #
+    #################################
+
+    make_port_rule()
+    {
+        local protocol=$1
+        local port=$2
+
+
+        if [[ "$port" == "*" ]]; then
+            echo "$protocol"
+            return
+        fi
+
+
+        if [[ "$port" == *-* ]]; then
+            echo "$protocol dport {$port}"
+        else
+            echo "$protocol dport $port"
+        fi
+    }
+
+
+
+#################################
+# TCP #
+#################################
+
+if [[ "$proto" == "tcp" ||
+      "$proto" == "both" ]]; then
+
+    if [[ "$srcPort" == "*" ]]; then
+
+        nft add rule ip dreamcast prerouting \
+            iifname "$interface" \
+            ip daddr "$srcIP" \
+            meta l4proto tcp \
+            dnat to "$dnatTarget"
+
+    else
+
+        nft add rule ip dreamcast prerouting \
+            iifname "$interface" \
+            ip daddr "$srcIP" \
+            tcp dport "$srcPort" \
+            dnat to "$dnatTarget"
+
+    fi
+
+fi
+
+
+
+#################################
+# UDP #
+#################################
+
+if [[ "$proto" == "udp" ||
+      "$proto" == "both" ]]; then
+
+    if [[ "$srcPort" == "*" ]]; then
+
+        nft add rule ip dreamcast prerouting \
+            iifname "$interface" \
+            ip daddr "$srcIP" \
+            meta l4proto udp \
+            dnat to "$dnatTarget"
+
+    else
+
+        nft add rule ip dreamcast prerouting \
+            iifname "$interface" \
+            ip daddr "$srcIP" \
+            udp dport "$srcPort" \
+            dnat to "$dnatTarget"
+
+    fi
+
+fi
+done
+
+#################
+# Domain
+#################
+
+echo
+echo "Processing Domain Overrides..."
+
+grep '^Domain:' "$Override" | grep -v '^#' | awk '{print $2}' |
+while read -r domain
+do
+
+	domain="${domain,,}"
+	domain="${domain%.}"
+
+	printf "address=/%s/%s\n" \
+		"$domain" \
+		"$directTo" >>"$dnsmasqFile"
+
+	echo "DOMAIN $domain -> $directTo"
+
+done
+
+echo
+echo "Generated dnsmasq config:"
+echo "------------------------"
+cat "$dnsmasqFile"
+echo "------------------------"
+
+echo "Restarting: apache"
+sudo service apache2 restart > /dev/null 2>&1
+
+echo "Restarting: dnsmasq"
+if command -v systemctl >/dev/null; 2>&1; then
+	    sudo systemctl restart dnsmasq
+else
+	sudo service dnsmasq restart
+fi
+
+wait
 
 fi
 
 echo "Updating Settings - Complete"
+
