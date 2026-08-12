@@ -1,4 +1,250 @@
 #!/bin/bash
+#
+# Script to check that the necessary software is installed,
+# if not it will attempt to install it.
+#
+
+###################################
+# Override file
+###################################
+
+Override="Override.txt"
+
+[[ -n "$1" ]] && Override="$1"
+
+###################################
+# Detect package manager
+###################################
+
+if command -v apt-get >/dev/null 2>&1; then
+    PKG_MANAGER="apt"
+
+elif command -v dnf >/dev/null 2>&1; then
+    PKG_MANAGER="dnf"
+
+elif command -v yum >/dev/null 2>&1; then
+    PKG_MANAGER="yum"
+
+elif command -v pacman >/dev/null 2>&1; then
+    PKG_MANAGER="pacman"
+
+elif command -v zypper >/dev/null 2>&1; then
+    PKG_MANAGER="zypper"
+
+else
+    echo "Unsupported Linux distribution."
+    exit 1
+fi
+
+###################################
+# Package translation
+###################################
+
+packageName() {
+
+    case "$PKG_MANAGER:$1" in
+
+        apt:apache)
+            echo apache2
+            ;;
+
+        dnf:apache|yum:apache)
+            echo httpd
+            ;;
+
+        pacman:apache)
+            echo apache
+            ;;
+
+        zypper:apache)
+            echo apache2
+            ;;
+
+        apt:apache-php)
+            echo libapache2-mod-php
+            ;;
+
+        dnf:apache-php|yum:apache-php)
+            echo php
+            ;;
+
+        pacman:apache-php)
+            echo php-apache
+            ;;
+
+        zypper:apache-php)
+            echo apache2-mod_php8
+            ;;
+
+        *)
+            echo "$1"
+            ;;
+    esac
+}
+
+###################################
+# Check package
+###################################
+
+needPackage() {
+
+    local pkg
+    pkg=$(packageName "$1")
+
+    case "$PKG_MANAGER" in
+
+        apt)
+            dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null |
+                grep -q "install ok installed"
+            ;;
+
+        dnf|yum)
+            rpm -q "$pkg" >/dev/null 2>&1
+            ;;
+
+        pacman)
+            pacman -Q "$pkg" >/dev/null 2>&1
+            ;;
+
+        zypper)
+            rpm -q "$pkg" >/dev/null 2>&1
+            ;;
+    esac
+
+    if [[ $? -ne 0 ]]; then
+        echo "Need to install $pkg"
+        return 1
+    fi
+
+    return 0
+}
+
+###################################
+# Install package
+###################################
+
+installPackage() {
+
+    local pkg
+    pkg=$(packageName "$1")
+
+    echo "Installing $pkg..."
+
+    case "$PKG_MANAGER" in
+
+        apt)
+            sudo apt-get -y install "$pkg"
+            ;;
+
+        dnf)
+            sudo dnf install -y "$pkg"
+            ;;
+
+        yum)
+            sudo yum install -y "$pkg"
+            ;;
+
+        pacman)
+            sudo pacman --noconfirm -S "$pkg"
+            ;;
+
+        zypper)
+            sudo zypper --non-interactive install "$pkg"
+            ;;
+    esac
+}
+
+###################################
+# Check required software
+###################################
+
+checkInstalled() {
+
+    needPackage ppp
+    needPPP=$?
+
+    needPackage wvdial
+    needWVDial=$?
+
+    overWeb=$(grep "Webserver Off" "$Override" | grep -v '#')
+
+    if [[ -z "$overWeb" ]]; then
+
+        needPackage apache
+        needApache=$?
+
+        needPackage dnsmasq
+        needDNS=$?
+
+        needPackage php-common
+        needPHP=$?
+
+        needPackage apache-php
+        needAP=$?
+
+        needPackage php-cli
+        needPHPcli=$?
+
+        needPackage php-gd
+        needGD=$?
+
+    else
+
+        needApache=0
+        needDNS=0
+        needPHP=0
+        needAP=0
+        needPHPcli=0
+        needGD=0
+
+    fi
+
+    if [[ $needPPP == 1 ]] ||
+       [[ $needWVDial == 1 ]] ||
+       [[ $needApache == 1 ]] ||
+       [[ $needDNS == 1 ]] ||
+       [[ $needPHP == 1 ]] ||
+       [[ $needAP == 1 ]] ||
+       [[ $needPHPcli == 1 ]] ||
+       [[ $needGD == 1 ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+###################################
+# Main
+###################################
+
+checkInstalled
+hasAllPrograms=$?
+
+if [[ $hasAllPrograms == 0 ]]; then
+
+    echo "Preparing to install missing software..."
+
+    [[ $needPPP == 1 ]] && installPackage ppp
+    [[ $needWVDial == 1 ]] && installPackage wvdial
+    [[ $needApache == 1 ]] && installPackage apache
+    [[ $needDNS == 1 ]] && installPackage dnsmasq
+    [[ $needPHP == 1 ]] && installPackage php-common
+    [[ $needAP == 1 ]] && installPackage apache-php
+    [[ $needPHPcli == 1 ]] && installPackage php-cli
+    [[ $needGD == 1 ]] && installPackage php-gd
+
+    checkInstalled
+    hasAllPrograms=$?
+
+    if [[ $hasAllPrograms == 0 ]]; then
+        echo
+        echo "Error: Missing necessary software."
+        exit 1
+    fi
+fi
+
+exit 0
+#!/bin/bash
 # Script to check that the necessary software is installed,
 # if not it will attempt to get it.
 #
