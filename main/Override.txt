@@ -68,6 +68,9 @@ Dreamcast IP:
 #
 # Sylverant PSO Server
 # Set DNS: 67.222.144.120
+#
+# Dreampi DNS Server
+Set DNS: 46.101.91.123
 
 
 
@@ -159,15 +162,6 @@ Domain: passport.shenmue.com
 
 
 
-# Set Groups
-# Here you can specify the IP address or the domain you want a Group to
-# redirect to.
-#
-# Example:
-# Group:	GamePSO		192.168.1.13
-Group:		GamePSO		192.168.1.29
-
-
 
 # Set Server Redirect
 # Here you can specify the Domains you want dnsmasq to redirect to and
@@ -180,46 +174,42 @@ Group:		GamePSO		192.168.1.29
 # Example:
 # Redirect:	www.sega.com	192.168.1.1
 #
-# Domain -	The domain will be directed to the specified domain by
-# looking up the target domain's IP address.
-# Example (redirect sega to google):
-# Redirect:	www.sega.com	www.google.com
-#
-# Group -	The domain will be directed to the IP address of the Group
-# that's specified. This is useful should a single game use many servers,
-# using a group allows all these servers to point to a single location.
-# Thus if the server changes, only a single location in this file needs to
-# be updated.
-# Example:
-# Redirect:	pso.dream-key.com	GamePSO
-#
-# Note: Be aware issues may arise if "Redirect" and "Domain" have the
-# same sites and differ only with sub domains. In that case the
-# "Redirect" will take precedence
 #
 # Phantasy Star Online Uses:
-# Redirect:	game01.st-pso.games.sega.net
-# Redirect:	game04.st-pso.games.sega.net
-# Redirect:	pso01.dricas.ne.jp
-# Redirect:	master.pso.dream-key.com
-# Redirect:	pso.dream-key.com
+Redirect:	game01.st-pso.games.sega.net  	138.197.20.130
+Redirect:	game04.st-pso.games.sega.net  	138.197.20.130
+Redirect:	pso01.dricas.ne.jp  	138.197.20.130
+Redirect:	master.pso.dream-key.com  	138.197.20.130
+Redirect:	pso.dream-key.com  	138.197.20.130
 #
 # 4x4 Evolution Uses:
-# Redirect:	master.4x4evolution.com
-# Redirect:	master1.4x4evolution.com
+Redirect:	master.4x4evolution.com  	100.10.4.70
+# Redirect:	master.4x4evolution.com  	146.185.135.179
+# Redirect: master1.4x4evolution.com
 # Redirect:	master2.4x4evolution.com
 # Redirect:	master3.4x4evolution.com
 # Redirect:	master4.4x4evolution.com
 # Redirect:	master5.4x4evolution.com
 #
 # Starlancer Uses:
-# Redirect:	master.gamespy.com
-# Redirect:	peerchat.gamespy.com
+Redirect:	master.gamespy.com  	146.185.135.179
+Redirect:	peerchat.gamespy.com  	146.185.135.179
 #
 # Quake 3 Arena Uses:
-# Redirect:	master.quake3arena.com  	GameQ3
+Redirect:	master.quake3arena.com  	100.10.51.236
 
-Redirect:	game01.st-pso.games.sega.net	GamePSO
-Redirect:	pso01.dricas.ne.jp		GamePSO
-Redirect:	master.pso.dream-key.com	GamePSO
-Redirect:	pso.dream-key.com		GamePSO
+# This Section is for Redirecting Hardcoded IP addresses.
+# Some games for the dreamcast use hardcodded IP addresses to connect to servers
+# such as Alien Front online. You'll need to specify upd/tcp or both then set the
+# name of your network interface ppp0 seems to be default. 
+# Finally you can specify ports if you leave blank it'll auto detect
+# Note this will NOT replace port forwarding
+
+# Example:
+# IPRedirect: tcp ppp0 192.168.1.10:8080 192.168.1.13:2780
+# Alien Front Online
+IPRedirect: both ppp0 63.251.242.131 146.185.135.179
+# Daytona USA JP/Aero Dancing
+IPRedirect: both ppp0 10.200.0.1 146.185.135.179
+# RuneJade
+IPRedirect: both ppp0 23.92.76.195 146.185.135.179
