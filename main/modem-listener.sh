@@ -270,7 +270,7 @@ readReply() {
 		logSYS "Starting PPPD server"
 
 		# Start PPP to handle the current connection
-		pon $DCuser
+		pppd call $DCuser
 
 		# Release the streams to the modem
 		exec 5<&-
