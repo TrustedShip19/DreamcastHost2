@@ -432,6 +432,27 @@ exec sudo ./load-websites.sh &
 # Wait for the website update to finish executing
 wait $!
 
+#############################
+# Build WVDial config #
+#############################
+	wvdialFile="/etc/wvdial.conf"
+
+	echo "Writing: $wvdialFile"
+
+	cat >"$wvdialFile" <<EOF
+	[Dialer Defaults]
+Init1 = ATZ
+Init2 = ATQ0 V1 E1 S0=0 &C1 &D2 +FCLASS=0
+Modem Type = USB Modem
+; Phone = <Target Phone Number>
+ISDN = 0
+; Password = <Your Password>
+; Username = <Your Login Name>
+Modem = $MODEM
+Baud = 460800
+EOF
+
+
 # Set up dnsmasq file for Apache Server
 #############################
 # Build dnsmasq config #
