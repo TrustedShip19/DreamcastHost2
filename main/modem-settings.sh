@@ -483,7 +483,6 @@ do
 			"$target" >>"$dnsmasqFile"
 
 		echo "HOST $host -> $target"
-	else
 	fi
 done
 
