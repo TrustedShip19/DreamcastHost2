@@ -412,7 +412,7 @@ if [[ -z $overWeb ]]; then
 	# Make sure the apache2 config file exists.
 	# If not we make a default one to avoid
 	# a couple harmless warnings.
-	apacheDefault="/etc/httpd/conf/httpd.conf"
+	apacheDefault="/etc/apache2/apache2.conf"
 	hasServerName=$( grep "ServerName" $apacheDefault | grep -v \# )
 	if [[ -z $hasServerName ]]; then
 		echo "Writing:  $apacheDefault"
